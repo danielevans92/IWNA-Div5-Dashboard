@@ -278,6 +278,12 @@ label{display:block;font-size:11px;color:#888;margin-bottom:3px;font-weight:600}
       <!-- Top scorers bar -->
       <div style="font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;margin:10px 0 6px">Top scorers</div>
       <div class="card"><div id="topScore"></div></div>
+      <!-- One-time data correction tool -->
+      <div class="card" style="margin-top:12px;background:#fff8e1;border-color:#ffe082">
+        <div style="font-size:11px;font-weight:700;color:#e65100;margin-bottom:6px">⚠️ One-time stat correction</div>
+        <div style="font-size:11px;color:#555;margin-bottom:8px">Ashley Blake-Dyke's stats were not saved correctly due to a position-rotation bug. Tap below to reconstruct her stats from the match events log and add them to her season totals. Only tap once — then sync to cloud.</div>
+        <button class="btn btnsm" style="background:#f0a500;color:#fff;border-color:#f0a500" onclick="fixAshleyStats()">Fix Ashley Blake-Dyke stats</button>
+      </div>
     </div>
   </div>
 </div>
@@ -958,75 +964,97 @@ function renderEL(){
 /* ── SAVE GAME ── */
 function saveGame(){
   var saved=0;
-  /* Collect all player+pos keys that have stats, including subbed-out players */
   var savedPids={};
-  /* helper: accumulate stats for a pid from a given pos key */
-  function accumPid(pid, posKey){
-    if(!pid)return;
+  var ALL_STAT_KEYS=['goals','attempts','assists','cpr','pickup','dReb','oReb','intercepts','deflections','turnovers','badpass','badhands','contact','obstruction'];
+  var emptyQtr=function(){return{goals:0,attempts:0,intercepts:0,cpr:0,assists:0,pickup:0,dReb:0,oReb:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};};
+
+  /* Get or create season stats record for a player */
+  function getOrCreateSt(pid){
     var st=D.sStats.find(function(s){return s.pid===pid;});
-    var emptyQtr=function(){return{goals:0,attempts:0,intercepts:0,cpr:0,assists:0,pickup:0,dReb:0,oReb:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};};
     if(!st){st={pid:pid,games:0,goals:0,attempts:0,assists:0,cpr:0,pickup:0,dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0,qtr:{1:emptyQtr(),2:emptyQtr(),3:emptyQtr(),4:emptyQtr()}};D.sStats.push(st);}
+    if(!st.qtr){st.qtr={1:emptyQtr(),2:emptyQtr(),3:emptyQtr(),4:emptyQtr()};}
+    for(var qi=1;qi<=4;qi++){if(!st.qtr[qi])st.qtr[qi]=emptyQtr();}
+    return st;
+  }
+
+  /* Add stats from a specific posKey+quarter to a player */
+  function addQtrStats(pid, posKey, q){
+    if(!pid)return;
+    var st=getOrCreateSt(pid);
     if(!savedPids[pid]){st.games++;savedPids[pid]=true;saved++;}
-    ['goals','attempts','assists','cpr','pickup','dReb','oReb','intercepts','deflections','turnovers','badpass','badhands','contact','obstruction'].forEach(function(k){
-      var tot=0;
-      for(var q=1;q<=4;q++){
-        /* Check both exact posKey and all posKey+suffix variants */
-        Object.keys(D.live.stats).forEach(function(pk){
-          if(pk===posKey||pk.indexOf(posKey+'_')===0){
-            tot+=(D.live.stats[pk]&&D.live.stats[pk][q]?D.live.stats[pk][q][k]||0:0);
-          }
-        });
-      }
-      st[k]=(st[k]||0)+tot;
+    var qs=D.live.stats[posKey]&&D.live.stats[posKey][q]?D.live.stats[posKey][q]:{};
+    ALL_STAT_KEYS.forEach(function(k){
+      var v=qs[k]||0;
+      st[k]=(st[k]||0)+v;
+      st.qtr[q][k]=(st.qtr[q][k]||0)+v;
     });
-    var ALL_QTR_KEYS=['goals','attempts','intercepts','cpr','assists','pickup','dReb','oReb','deflections','turnovers','badpass','badhands','contact','obstruction'];
-    for(var q2=1;q2<=4;q2++){
-      if(!st.qtr[q2])st.qtr[q2]=emptyQtr();
-      Object.keys(D.live.stats).forEach(function(pk){
-        if(pk===posKey||pk.indexOf(posKey+'_')===0){
-          ALL_QTR_KEYS.forEach(function(k2){
-            st.qtr[q2][k2]+=(D.live.stats[pk]&&D.live.stats[pk][q2]?D.live.stats[pk][q2][k2]||0:0);
-          });
+  }
+
+  /* For each quarter, work out which player was in each position and accumulate their stats.
+     A position may have: a pre-match assignment from preLineup, plus mid-quarter subs
+     stored as posKey_sub1, posKey_sub2, etc. in D.live.stats.
+     We must attribute:
+       - base posKey stats for quarter q → the player who started that quarter in that pos
+       - posKey_subN stats for quarter q → the Nth sub into that pos (from subHistory) */
+  for(var q=1;q<=4;q++){
+    POS.forEach(function(pos){
+      /* Who started this quarter in this position?
+         Priority: preLineup for this quarter, falling back to the final assignment */
+      var startPid=(D.preLineup&&D.preLineup[q]&&D.preLineup[q][pos])?D.preLineup[q][pos]:null;
+      /* If no preLineup for this quarter, use current assign (handles single-quarter games) */
+      if(!startPid&&q===D.live.qtr){startPid=D.live.assign[pos]||null;}
+
+      /* Base posKey stats for this quarter go to the starter */
+      if(startPid&&D.live.stats[pos]&&D.live.stats[pos][q]){
+        addQtrStats(startPid, pos, q);
+      }
+
+      /* Sub slots: posKey_sub1, posKey_sub2, etc. */
+      /* Find subs for this pos in this quarter, in order */
+      var qSubs=D.live.subHistory.filter(function(s){return s.pos===pos&&s.q===q;});
+      qSubs.forEach(function(sub, idx){
+        var subKey=pos+'_sub'+(idx+1);
+        /* Count ALL sub entries for this pos up to this point (across quarters) to get the right key */
+        var globalIdx=D.live.subHistory.filter(function(s){return s.pos===pos&&(s.q<q||(s.q===q&&D.live.subHistory.indexOf(s)<=D.live.subHistory.indexOf(sub)));}).length;
+        var globalSubKey=pos+'_sub'+globalIdx;
+        if(sub.onId&&D.live.stats[globalSubKey]&&D.live.stats[globalSubKey][q]){
+          addQtrStats(sub.onId, globalSubKey, q);
+        }
+        /* Also try the simpler per-quarter index in case keys were created differently */
+        if(sub.onId&&subKey!==globalSubKey&&D.live.stats[subKey]&&D.live.stats[subKey][q]){
+          addQtrStats(sub.onId, subKey, q);
         }
       });
-    }
+    });
   }
-  /* Save current assignment */
-  POS.forEach(function(pos){accumPid(D.live.assign[pos], pos);});
-  /* Also save stats for any subbed-out players */
-  D.live.subHistory.forEach(function(sub){
-    var offPid=null;
-    /* Find pid of the player who came off - they were in assign before sub */
-    var p=D.players.find(function(x){return(x.first+' '+x.last)===sub.offName||(sub.offName&&sub.offName.indexOf(x.first)===0);});
-    if(p)accumPid(p.id, sub.pos);
-  });
   /* ── Snapshot this match for Match Summary review ── */
   var snapFid=D.live.fixId;
   var snapScore=D.live.score?JSON.parse(JSON.stringify(D.live.score)):{us:[0,0,0,0],them:[0,0,0,0]};
   var snapEvents=D.live.events.slice();
-  /* Build per-player snapshot for this match */
+  /* Build per-player snapshot using same quarter-aware logic */
   var snapPlayerStats=[];
-  Object.keys(D.live.stats).forEach(function(posKey){
-    /* resolve which player played this key */
-    var basePos=posKey.split('_')[0];
-    var pid=D.live.assign[basePos];
-    /* for sub slots, find the player who was subbed IN for this slot */
-    if(posKey.indexOf('_sub')>0){
-      var subIdx=parseInt(posKey.split('_sub')[1])-1;
-      var subs=D.live.subHistory.filter(function(s){return s.pos===basePos;});
-      if(subs[subIdx])pid=subs[subIdx].onId;
-    }
+  function addSnapStats(pid, posKey, q){
     if(!pid)return;
-    var gs={pid:pid,pos:basePos,goals:0,attempts:0,assists:0,cpr:0,pickup:0,dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};
-    for(var q=1;q<=4;q++){
-      var qs=D.live.stats[posKey]&&D.live.stats[posKey][q]?D.live.stats[posKey][q]:{};
-      ['goals','attempts','assists','cpr','pickup','dReb','oReb','intercepts','deflections','turnovers','badpass','badhands','contact','obstruction'].forEach(function(k){gs[k]+=(qs[k]||0);});
-    }
-    /* merge if same pid already in snap (multi-pos) */
+    var qs=D.live.stats[posKey]&&D.live.stats[posKey][q]?D.live.stats[posKey][q]:{};
+    var hasAny=ALL_STAT_KEYS.some(function(k){return qs[k]>0;});
+    if(!hasAny)return;
     var ex=snapPlayerStats.find(function(x){return x.pid===pid;});
-    if(ex){['goals','attempts','assists','cpr','pickup','dReb','oReb','intercepts','deflections','turnovers','badpass','badhands','contact','obstruction'].forEach(function(k){ex[k]+=gs[k];});}
-    else snapPlayerStats.push(gs);
-  });
+    if(!ex){ex={pid:pid,pos:posKey.split('_')[0],goals:0,attempts:0,assists:0,cpr:0,pickup:0,dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};snapPlayerStats.push(ex);}
+    ALL_STAT_KEYS.forEach(function(k){ex[k]+=(qs[k]||0);});
+  }
+  for(var sq=1;sq<=4;sq++){
+    POS.forEach(function(spos){
+      var startPid2=(D.preLineup&&D.preLineup[sq]&&D.preLineup[sq][spos])?D.preLineup[sq][spos]:null;
+      if(!startPid2&&sq===D.live.qtr)startPid2=D.live.assign[spos]||null;
+      if(startPid2)addSnapStats(startPid2,spos,sq);
+      var sqSubs=D.live.subHistory.filter(function(s){return s.pos===spos&&s.q===sq;});
+      sqSubs.forEach(function(sub,idx){
+        var globalIdx2=D.live.subHistory.filter(function(s){return s.pos===spos&&(s.q<sq||(s.q===sq&&D.live.subHistory.indexOf(s)<=D.live.subHistory.indexOf(sub)));}).length;
+        var gKey=spos+'_sub'+globalIdx2;
+        if(sub.onId)addSnapStats(sub.onId,gKey,sq);
+      });
+    });
+  }
   if(snapFid){
     /* Remove any prior snapshot for this fixture */
     D.savedGames=D.savedGames.filter(function(g){return g.fixId!==snapFid;});
@@ -1335,6 +1363,133 @@ function openMatchSummary(fid){
 }
 
 renderAll();
+
+/* ── ONE-TIME STAT CORRECTION for Ashley Blake-Dyke ── */
+function fixAshleyStats(){
+  /* Diagnose full data state first */
+  var diag='Data state:\n';
+  diag+='  Players: '+(D.players?D.players.length:0)+'\n';
+  diag+='  savedGames: '+(D.savedGames?D.savedGames.length:0)+'\n';
+  diag+='  sStats: '+(D.sStats?D.sStats.length:0)+'\n';
+  if(D.savedGames&&D.savedGames.length){
+    D.savedGames.forEach(function(g,i){
+      diag+='  Game '+i+': fixId='+g.fixId+', events='+(g.events?g.events.length:0)+', playerStats='+(g.playerStats?g.playerStats.length:0)+'\n';
+    });
+  }
+
+  var ashley=D.players.find(function(p){
+    return (p.first+' '+p.last).toLowerCase().indexOf('ashley')>-1&&
+           (p.first+' '+p.last).toLowerCase().indexOf('blake')>-1;
+  });
+  if(!ashley){
+    alert('Could not find Ashley Blake-Dyke.\n\nAll players:\n'+
+      (D.players||[]).map(function(p){return p.first+' '+p.last;}).join('\n')+
+      '\n\n'+diag);
+    return;
+  }
+
+  if(!D.savedGames||!D.savedGames.length){
+    alert('No saved game data found.\n\n'+diag+
+      '\nIf the sync indicator shows "Synced" but this is still empty, the game stats may not have been saved yet from the Live tab.\n\nIf it shows "Loading..." please wait and try again.');
+    return;
+  }
+
+  /* Find the game with events */
+  var sg=D.savedGames.find(function(g){return g.events&&g.events.length>0;});
+  if(!sg){
+    alert('No saved game has an events log.\n\n'+diag+
+      '\nStats can only be reconstructed if events were logged during the match.');
+    return;
+  }
+
+  /* Ashley played GA in Q1 and Q2 only */
+  var ASHLEY_QTRS=[1,2];
+  var emptyS=function(){return{goals:0,attempts:0,intercepts:0,cpr:0,assists:0,pickup:0,dReb:0,oReb:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};};
+  var ashleyStats=emptyS();
+  var ashleyQtr={1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()};
+
+  var evMap=[
+    {pat:'goal scored',              k:{goals:1,attempts:1}},
+    {pat:'missed, own rebound',      k:{attempts:1,dReb:1}},
+    {pat:'missed, teammate rebound', k:{attempts:1,oReb:1}},
+    {pat:'missed, opp rebound',      k:{attempts:1,turnovers:1}},
+    {pat:'offensive rebound',        k:{oReb:1}},
+    {pat:'intercepts',               k:{intercepts:1}},
+    {pat:'— cpr',                    k:{cpr:1}},
+    {pat:'— assists',                k:{assists:1}},
+    {pat:'— pickup',                 k:{pickup:1}},
+    {pat:'— dreb',                   k:{dReb:1}},
+    {pat:'— deflections',            k:{deflections:1}},
+    {pat:'— turnovers',              k:{turnovers:1}},
+    {pat:'— badpass',                k:{badpass:1}},
+    {pat:'— badhands',               k:{badhands:1}},
+    {pat:'— contact',                k:{contact:1}},
+    {pat:'— obstruction',            k:{obstruction:1}}
+  ];
+
+  var firstName=ashley.first.toLowerCase();
+  var found=0;
+  sg.events.forEach(function(ev){
+    if(!ev||!ev.msg)return;
+    var msg=ev.msg.toLowerCase();
+    var q=ev.q;
+    if(ASHLEY_QTRS.indexOf(q)<0)return;
+    if(msg.indexOf(firstName)!==0)return;
+    found++;
+    evMap.forEach(function(m){
+      if(msg.indexOf(m.pat)>-1){
+        Object.keys(m.k).forEach(function(stat){
+          ashleyStats[stat]=(ashleyStats[stat]||0)+m.k[stat];
+          ashleyQtr[q][stat]=(ashleyQtr[q][stat]||0)+m.k[stat];
+        });
+      }
+    });
+  });
+
+  if(found===0){
+    var sample=sg.events.slice(0,15).map(function(e){return'Q'+e.q+': '+e.msg;}).join('\n');
+    alert('No Q1/Q2 events found starting with "'+ashley.first+'".\n\nFirst 15 events in log:\n'+sample);
+    return;
+  }
+
+  /* Upsert Ashley sStats */
+  var st=D.sStats.find(function(s){return s.pid===ashley.id;});
+  if(!st){
+    st={pid:ashley.id,games:1,goals:0,attempts:0,assists:0,cpr:0,pickup:0,
+        dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,
+        badhands:0,contact:0,obstruction:0,qtr:{1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()}};
+    D.sStats.push(st);
+  } else {
+    if(!st.qtr)st.qtr={1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()};
+    for(var qi=1;qi<=4;qi++){if(!st.qtr[qi])st.qtr[qi]=emptyS();}
+  }
+  Object.keys(ashleyStats).forEach(function(k){st[k]=(st[k]||0)+ashleyStats[k];});
+  for(var q2=1;q2<=4;q2++){
+    Object.keys(ashleyQtr[q2]).forEach(function(k){st.qtr[q2][k]=(st.qtr[q2][k]||0)+ashleyQtr[q2][k];});
+  }
+
+  /* Upsert match snapshot */
+  if(!sg.playerStats)sg.playerStats=[];
+  var snap=sg.playerStats.find(function(s){return s.pid===ashley.id;});
+  if(!snap){
+    snap={pid:ashley.id,pos:'GA',goals:0,attempts:0,assists:0,cpr:0,pickup:0,
+          dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};
+    sg.playerStats.push(snap);
+  }
+  Object.keys(ashleyStats).forEach(function(k){snap[k]=(snap[k]||0)+ashleyStats[k];});
+
+  var msg2='Done! '+found+' events found for '+ashley.first+'.\n\nStats added:\n';
+  Object.keys(ashleyStats).forEach(function(k){if(ashleyStats[k]>0)msg2+='  '+k+': '+ashleyStats[k]+'\n';});
+  msg2+='\nBy quarter:';
+  [1,2].forEach(function(qi){
+    var qd=ashleyQtr[qi];
+    var lines=Object.keys(qd).filter(function(k){return qd[k]>0;}).map(function(k){return k+'='+qd[k];}).join(', ');
+    if(lines)msg2+='\n  Q'+qi+': '+lines;
+  });
+  msg2+='\n\nNow tap the sync/save button to persist to cloud.';
+  alert(msg2);
+  renderSummary();
+}
 </script>
 
 <script>
