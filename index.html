@@ -1549,8 +1549,15 @@ async function loadFromCloud(){
       if(cloud.savedGames)                         D.savedGames = cloud.savedGames;
       if(cloud.preLineup)                          D.preLineup  = cloud.preLineup;
       if(cloud.nid)                                D.nid        = cloud.nid;
+      /* ── One-time fix: clear false stat summary on Hawkesbury 8 Jul (fixture 11) ── */
+      var fix11=D.fixtures.find(function(x){return x.id===11;});
+      var hadBadData=fix11&&(fix11.statsRecorded||fix11.played);
+      if(fix11){fix11.statsRecorded=false;fix11.played=false;fix11.us=null;fix11.them=null;}
+      if(D.savedGames)D.savedGames=D.savedGames.filter(function(g){return g.fixId!==11;});
       renderAll();
       syncStatus('ok', 'Synced ' + new Date().toLocaleTimeString('en-AU', {hour:'2-digit',minute:'2-digit'}));
+      /* If we found and fixed bad data, immediately save the corrected version back to cloud */
+      if(hadBadData){saveToCloud();}
     } else {
       /* No cloud data yet — push local data up */
       syncStatus('ok', 'Ready (no cloud data yet)');
