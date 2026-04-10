@@ -278,11 +278,23 @@ label{display:block;font-size:11px;color:#888;margin-bottom:3px;font-weight:600}
       <!-- Top scorers bar -->
       <div style="font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;margin:10px 0 6px">Top scorers</div>
       <div class="card"><div id="topScore"></div></div>
-      <!-- One-time data correction tool -->
+      <!-- Manual stat editor -->
       <div class="card" style="margin-top:12px;background:#fff8e1;border-color:#ffe082">
-        <div style="font-size:11px;font-weight:700;color:#e65100;margin-bottom:6px">⚠️ One-time stat correction</div>
-        <div style="font-size:11px;color:#555;margin-bottom:8px">Ashley Blake-Dyke's stats were not saved correctly due to a position-rotation bug. Tap below to reconstruct her stats from the match events log and add them to her season totals. Only tap once — then sync to cloud.</div>
-        <button class="btn btnsm" style="background:#f0a500;color:#fff;border-color:#f0a500" onclick="fixAshleyStats()">Fix Ashley Blake-Dyke stats</button>
+        <div style="font-size:11px;font-weight:700;color:#e65100;margin-bottom:4px">✏️ Manual stat editor</div>
+        <div style="font-size:11px;color:#555;margin-bottom:8px">Select a player to view and edit their season stats directly.</div>
+        <select id="editPlayerSel" onchange="loadEditPlayer()" style="margin-bottom:8px;font-size:12px">
+          <option value="">— select player —</option>
+        </select>
+        <div id="editPlayerStats" style="display:none">
+          <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:6px">Season totals — edit as needed:</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px" id="editStatFields"></div>
+          <div style="font-size:11px;font-weight:700;color:#555;margin:8px 0 6px">Quarter breakdown — edit as needed:</div>
+          <div id="editQtrFields"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btnsm btnp" onclick="saveEditPlayer()">Save changes</button>
+            <button class="btn btnsm" onclick="document.getElementById('editPlayerStats').style.display='none'">Cancel</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1364,8 +1376,109 @@ function openMatchSummary(fid){
 
 renderAll();
 
-/* ── ONE-TIME STAT CORRECTION for Ashley Blake-Dyke ── */
-function fixAshleyStats(){
+/* ── MANUAL STAT EDITOR ── */
+var EDIT_STAT_KEYS=['goals','attempts','assists','cpr','pickup','dReb','oReb','intercepts','deflections','turnovers','badpass','badhands','contact','obstruction'];
+var EDIT_STAT_LABELS={goals:'Goals',attempts:'Attempts',assists:'Assists',cpr:'CP Receives',pickup:'Pickup',dReb:'D.Reb',oReb:'O.Reb',intercepts:'Intercepts',deflections:'Deflections',turnovers:'Turnovers',badpass:'Bad Pass',badhands:'Bad Hands',contact:'Contact',obstruction:'Obstruction'};
+var _editPid=null;
+
+function populateEditPlayerSel(){
+  var sel=document.getElementById('editPlayerSel');
+  if(!sel)return;
+  /* Populate with all players, marking those with sStats */
+  sel.innerHTML='<option value="">— select player —</option>';
+  var sorted=D.players.slice().sort(function(a,b){return(a.first+a.last).localeCompare(b.first+b.last);});
+  sorted.forEach(function(p){
+    var hasSt=D.sStats.some(function(s){return s.pid===p.id;});
+    var opt=document.createElement('option');
+    opt.value=p.id;
+    opt.textContent=p.first+' '+p.last+(hasSt?' ✓':'');
+    sel.appendChild(opt);
+  });
+}
+
+function loadEditPlayer(){
+  var sel=document.getElementById('editPlayerSel');
+  var pid=parseInt(sel.value);
+  if(!pid){document.getElementById('editPlayerStats').style.display='none';return;}
+  _editPid=pid;
+
+  var p=D.players.find(function(x){return x.id===pid;});
+  var st=D.sStats.find(function(s){return s.pid===pid;});
+  var emptyS=function(){return{goals:0,attempts:0,intercepts:0,cpr:0,assists:0,pickup:0,dReb:0,oReb:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};};
+
+  /* Build season totals fields */
+  var totalsDiv=document.getElementById('editStatFields');
+  totalsDiv.innerHTML='';
+  EDIT_STAT_KEYS.forEach(function(k){
+    var val=st?st[k]||0:0;
+    var wrap=document.createElement('div');
+    wrap.innerHTML='<label style="font-size:10px;color:#888;margin-bottom:2px">'+EDIT_STAT_LABELS[k]+'</label>'+
+      '<input type="number" min="0" id="editStat_'+k+'" value="'+val+'" style="padding:6px 8px;font-size:13px">';
+    totalsDiv.appendChild(wrap);
+  });
+  /* Games played */
+  var gamesWrap=document.createElement('div');
+  gamesWrap.innerHTML='<label style="font-size:10px;color:#888;margin-bottom:2px">Games played</label>'+
+    '<input type="number" min="0" id="editStat_games" value="'+(st?st.games||0:0)+'" style="padding:6px 8px;font-size:13px">';
+  totalsDiv.insertBefore(gamesWrap,totalsDiv.firstChild);
+
+  /* Build per-quarter fields */
+  var qtrDiv=document.getElementById('editQtrFields');
+  qtrDiv.innerHTML='';
+  for(var q=1;q<=4;q++){
+    var qd=(st&&st.qtr&&st.qtr[q])?st.qtr[q]:emptyS();
+    var qSection=document.createElement('div');
+    qSection.style.cssText='margin-bottom:10px';
+    qSection.innerHTML='<div style="font-size:11px;font-weight:700;color:#1565c0;margin-bottom:4px">Quarter '+q+'</div>';
+    var qGrid=document.createElement('div');
+    qGrid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:4px';
+    EDIT_STAT_KEYS.forEach(function(k){
+      var val=qd[k]||0;
+      var fw=document.createElement('div');
+      fw.innerHTML='<label style="font-size:9px;color:#aaa;margin-bottom:1px">'+EDIT_STAT_LABELS[k]+'</label>'+
+        '<input type="number" min="0" id="editQ'+q+'_'+k+'" value="'+val+'" style="padding:4px 6px;font-size:12px">';
+      qGrid.appendChild(fw);
+    });
+    qSection.appendChild(qGrid);
+    qtrDiv.appendChild(qSection);
+  }
+
+  document.getElementById('editPlayerStats').style.display='block';
+}
+
+function saveEditPlayer(){
+  if(!_editPid)return;
+  var emptyS=function(){return{goals:0,attempts:0,intercepts:0,cpr:0,assists:0,pickup:0,dReb:0,oReb:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};};
+  var st=D.sStats.find(function(s){return s.pid===_editPid;});
+  if(!st){st={pid:_editPid,games:0,goals:0,attempts:0,assists:0,cpr:0,pickup:0,dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0,qtr:{1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()}};D.sStats.push(st);}
+  if(!st.qtr)st.qtr={1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()};
+
+  /* Read season totals */
+  st.games=parseInt(document.getElementById('editStat_games').value)||0;
+  EDIT_STAT_KEYS.forEach(function(k){
+    var el=document.getElementById('editStat_'+k);
+    st[k]=el?parseInt(el.value)||0:st[k];
+  });
+  /* Read per-quarter */
+  for(var q=1;q<=4;q++){
+    if(!st.qtr[q])st.qtr[q]=emptyS();
+    EDIT_STAT_KEYS.forEach(function(k){
+      var el=document.getElementById('editQ'+q+'_'+k);
+      st.qtr[q][k]=el?parseInt(el.value)||0:st.qtr[q][k];
+    });
+  }
+
+  document.getElementById('editPlayerStats').style.display='none';
+  document.getElementById('editPlayerSel').value='';
+  _editPid=null;
+  renderSummary();
+  alert('Stats saved for this player.\n\nRemember to tap the sync button to push changes to cloud.');
+}
+
+/* Populate the editor dropdown whenever the summary tab is opened */
+var _origRenderSummary=renderSummary;
+renderSummary=function(){_origRenderSummary();populateEditPlayerSel();};
+
   /* Diagnose full data state first */
   var diag='Data state:\n';
   diag+='  Players: '+(D.players?D.players.length:0)+'\n';
@@ -1454,42 +1567,7 @@ function fixAshleyStats(){
 
   /* Upsert Ashley sStats */
   var st=D.sStats.find(function(s){return s.pid===ashley.id;});
-  if(!st){
-    st={pid:ashley.id,games:1,goals:0,attempts:0,assists:0,cpr:0,pickup:0,
-        dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,
-        badhands:0,contact:0,obstruction:0,qtr:{1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()}};
-    D.sStats.push(st);
-  } else {
-    if(!st.qtr)st.qtr={1:emptyS(),2:emptyS(),3:emptyS(),4:emptyS()};
-    for(var qi=1;qi<=4;qi++){if(!st.qtr[qi])st.qtr[qi]=emptyS();}
-  }
-  Object.keys(ashleyStats).forEach(function(k){st[k]=(st[k]||0)+ashleyStats[k];});
-  for(var q2=1;q2<=4;q2++){
-    Object.keys(ashleyQtr[q2]).forEach(function(k){st.qtr[q2][k]=(st.qtr[q2][k]||0)+ashleyQtr[q2][k];});
-  }
 
-  /* Upsert match snapshot */
-  if(!sg.playerStats)sg.playerStats=[];
-  var snap=sg.playerStats.find(function(s){return s.pid===ashley.id;});
-  if(!snap){
-    snap={pid:ashley.id,pos:'GA',goals:0,attempts:0,assists:0,cpr:0,pickup:0,
-          dReb:0,oReb:0,intercepts:0,deflections:0,turnovers:0,badpass:0,badhands:0,contact:0,obstruction:0};
-    sg.playerStats.push(snap);
-  }
-  Object.keys(ashleyStats).forEach(function(k){snap[k]=(snap[k]||0)+ashleyStats[k];});
-
-  var msg2='Done! '+found+' events found for '+ashley.first+'.\n\nStats added:\n';
-  Object.keys(ashleyStats).forEach(function(k){if(ashleyStats[k]>0)msg2+='  '+k+': '+ashleyStats[k]+'\n';});
-  msg2+='\nBy quarter:';
-  [1,2].forEach(function(qi){
-    var qd=ashleyQtr[qi];
-    var lines=Object.keys(qd).filter(function(k){return qd[k]>0;}).map(function(k){return k+'='+qd[k];}).join(', ');
-    if(lines)msg2+='\n  Q'+qi+': '+lines;
-  });
-  msg2+='\n\nNow tap the sync/save button to persist to cloud.';
-  alert(msg2);
-  renderSummary();
-}
 </script>
 
 <script>
