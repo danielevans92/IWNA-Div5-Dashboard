@@ -1686,15 +1686,14 @@ async function loadFromCloud(){
       if(cloud.players  && cloud.players.length)  D.players    = cloud.players;
       if(cloud.injuries && cloud.injuries.length)  D.injuries   = cloud.injuries;
       if(cloud.fixtures && cloud.fixtures.length)  D.fixtures   = cloud.fixtures;
-      if(cloud.sStats   && cloud.sStats.length)    D.sStats     = cloud.sStats;
-      if(cloud.savedGames)                         D.savedGames = cloud.savedGames;
       if(cloud.preLineup)                          D.preLineup  = cloud.preLineup;
       if(cloud.nid)                                D.nid        = cloud.nid;
-      /* ── RESET: wipe corrupted stat data only, preserve fixture scores ── */
+      /* ── RESET: wipe corrupted stat data, preserve fixture scores ── */
       D.sStats=[];
       D.savedGames=[];
       D.fixtures.forEach(function(f){f.statsRecorded=false;});
-      saveToCloud();
+      /* Save the clean state back after a short delay so sb is ready */
+      setTimeout(function(){saveToCloud();},500);
       /* ── One-time fix: deduplicate savedGames and attach the real entry to fixture 1 ── */
       if(D.savedGames&&D.savedGames.length>1){
         /* Keep only the entry with the most player stats */
