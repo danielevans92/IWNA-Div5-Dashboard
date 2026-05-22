@@ -1001,6 +1001,12 @@ function renderEL(){
 /* ── SAVE GAME ── */
 function saveGame(){
   if(!D.live.fixId){alert('No fixture selected. Tap a fixture from the Fixtures tab first.');return;}
+  /* Overwrite protection — warn if stats already saved for this fixture */
+  var existing=D.savedGames&&D.savedGames.find(function(g){return g.fixId===D.live.fixId;});
+  if(existing){
+    var word=prompt('⚠️ Stats are already saved for this fixture.\n\nSaving again will permanently overwrite them.\n\nType OVERWRITE to confirm, or Cancel to go back:');
+    if(word!=='OVERWRITE'){alert('Save cancelled — existing stats kept.');return;}
+  }
   var SK=['goals','attempts','assists','cpr','pickup','dReb','oReb','intercepts','deflections','turnovers','badpass','badhands','contact','obstruction'];
   var emptyQ=function(){var o={};SK.forEach(function(k){o[k]=0;});return o;};
 
